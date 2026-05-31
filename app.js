@@ -1,6 +1,12 @@
 const STORAGE_KEY = "gemini_api_key";
+const STORAGE_PARSE_MODE = "parse_mode";
 const STEP_PX = 56;
-const GEMINI_MODEL = "gemini-2.0-flash";
+/** 配額較寬的模型優先；429 時會依序嘗試下一個 */
+const GEMINI_MODELS = [
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash-8b",
+  "gemini-2.0-flash",
+];
 
 const ACTION_LABELS = {
   forward: "往前",
@@ -22,6 +28,8 @@ const elements = {
   settingsDialog: document.getElementById("settingsDialog"),
   settingsForm: document.getElementById("settingsForm"),
   apiKeyInput: document.getElementById("apiKeyInput"),
+  btnOpenSettings: document.getElementById("btnOpenSettings"),
+  btnOpenSettingsMain: document.getElementById("btnOpenSettingsMain"),
 };
 
 /** @type {{ x: number, y: number, centerX: number, centerY: number, maxX: number, maxY: number }} */
@@ -35,9 +43,21 @@ const state = {
 };
 
 let apiKey = localStorage.getItem(STORAGE_KEY) || "";
+let parseMode = localStorage.getItem(STORAGE_PARSE_MODE) || "auto";
 let recognition = null;
 let isListening = false;
 let isProcessing = false;
+
+const DIRECTION_RULES = [
+  { action: "forward", pattern: /往前|向前|前進|前走|前移|朝前/g },
+  { action: "backward", pattern: /往後|向后|後退|后退|後走|后移|朝後|朝后/g },
+  { action: "left", pattern: /往左|向左|左移|左走|朝左|左转|左轉/g },
+  { action: "right", pattern: /往右|向右|右移|右走|朝右|右转|右轉/g },
+];
+
+const CENTER_PATTERN = /回(到)?中央|回(到)?中間|歸位|回原點|回家|置中/;
+const CLAUSE_SPLIT = /[，。；、]|但是|但|不過|不过|然而|所以|因此|那就|請你?|麻煩/;
+const NEGATION_BEFORE = /(不要|別|勿|沒有?|不能|不可|不會|不願|不想|非)\s*$/;
 
 function setStatus(text) {
   elements.statusText.textContent = text;
@@ -52,17 +72,112 @@ function getApiKey() {
   return apiKey.trim();
 }
 
+function getParseMode() {
+  return parseMode;
+}
+
+function needsApiKey() {
+  return getParseMode() === "gemini";
+}
+
 function showSettingsIfNeeded() {
+  if (getParseMode() === "local") return true;
   if (!getApiKey()) {
-    elements.settingsDialog.showModal();
+    openSettings();
     return false;
   }
   return true;
 }
 
-function saveApiKey(key) {
+function openSettings() {
+  syncSettingsForm();
+  elements.settingsDialog.showModal();
+}
+
+function saveSettings(key, mode) {
   apiKey = key.trim();
+  parseMode = mode;
   localStorage.setItem(STORAGE_KEY, apiKey);
+  localStorage.setItem(STORAGE_PARSE_MODE, parseMode);
+}
+
+function syncSettingsForm() {
+  elements.apiKeyInput.value = apiKey;
+  const radio = elements.settingsForm.querySelector(
+    `input[name="parseMode"][value="${parseMode}"]`
+  );
+  if (radio) radio.checked = true;
+}
+
+function isQuotaError(status, bodyText) {
+  return status === 429 || /quota|rate limit|exceeded/i.test(bodyText || "");
+}
+
+/**
+ * 本機語意解析：處理否定與轉折句（Gemini 配額用盡時的備援）
+ * @returns {{ action: string, reason: string, source: string }}
+ */
+function parseIntentLocally(userText) {
+  const text = userText.replace(/\s+/g, "");
+
+  if (CENTER_PATTERN.test(text)) {
+    const idx = text.search(CENTER_PATTERN);
+    const before = text.slice(Math.max(0, idx - 8), idx);
+    if (!NEGATION_BEFORE.test(before)) {
+      return { action: "center", reason: "偵測到回到中央的指令", source: "local" };
+    }
+  }
+
+  const clauses = text.split(CLAUSE_SPLIT).filter(Boolean);
+  const segments = clauses.length ? clauses : [text];
+
+  /** @type {{ action: string, index: number, clauseIndex: number, negated: boolean }[]} */
+  const mentions = [];
+
+  segments.forEach((clause, clauseIndex) => {
+    for (const { action, pattern } of DIRECTION_RULES) {
+      const re = new RegExp(pattern.source, pattern.flags);
+      let match;
+      while ((match = re.exec(clause)) !== null) {
+        const at = match.index;
+        const before = clause.slice(Math.max(0, at - 12), at);
+        let negated = NEGATION_BEFORE.test(before);
+        if (/不會\s*$/.test(before) || /不會.*走/.test(before + match[0])) {
+          negated = true;
+        }
+        if (/會\s*$/.test(before) && !/不會\s*$/.test(before)) {
+          negated = false;
+        }
+        mentions.push({
+          action,
+          index: at,
+          clauseIndex,
+          negated,
+        });
+      }
+    }
+  });
+
+  const affirmative = mentions.filter((m) => !m.negated);
+  if (!affirmative.length) {
+    return { action: "none", reason: "僅偵測到否定或未辨識方向", source: "local" };
+  }
+
+  const laterClause = Math.max(...affirmative.map((m) => m.clauseIndex));
+  const inLater = affirmative.filter((m) => m.clauseIndex === laterClause);
+  const pool = inLater.length > 1 ? inLater : affirmative;
+
+  pool.sort((a, b) => {
+    if (a.clauseIndex !== b.clauseIndex) return b.clauseIndex - a.clauseIndex;
+    return a.index - b.index;
+  });
+
+  const chosen = pool[0];
+  return {
+    action: chosen.action,
+    reason: `本機規則辨識為「${ACTION_LABELS[chosen.action]}」`,
+    source: "local",
+  };
 }
 
 function measureArena() {
@@ -165,8 +280,6 @@ async function parseIntentWithGemini(userText) {
   const key = getApiKey();
   if (!key) throw new Error("請先設定 Gemini API Key");
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
-
   const body = {
     contents: [{ role: "user", parts: [{ text: buildGeminiPrompt(userText) }] }],
     generationConfig: {
@@ -176,40 +289,105 @@ async function parseIntentWithGemini(userText) {
     },
   };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let lastError = null;
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API 錯誤 (${res.status})：${errText.slice(0, 200)}`);
+  for (const model of GEMINI_MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const errText = res.ok ? "" : await res.text();
+
+    if (!res.ok) {
+      if (isQuotaError(res.status, errText)) {
+        lastError = { status: res.status, body: errText, quota: true };
+        continue;
+      }
+      throw new Error(formatGeminiError(res.status, errText));
+    }
+
+    const data = await res.json();
+    const text =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("無法解析 AI 回傳的 JSON");
+      parsed = JSON.parse(match[0]);
+    }
+
+    const action = String(parsed.action || "none").toLowerCase();
+    const valid = ["forward", "backward", "left", "right", "center", "none"];
+    if (!valid.includes(action)) {
+      return {
+        action: "none",
+        reason: parsed.reason || "無法辨識動作",
+        source: `gemini:${model}`,
+      };
+    }
+
+    return {
+      action,
+      reason: parsed.reason || ACTION_LABELS[action],
+      source: `gemini:${model}`,
+    };
   }
 
-  const data = await res.json();
-  const text =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+  const err = new Error(formatGeminiError(lastError?.status || 429, lastError?.body || ""));
+  err.quotaExceeded = true;
+  throw err;
+}
 
-  let parsed;
+function formatGeminiError(status, errText) {
+  if (isQuotaError(status, errText)) {
+    return (
+      "Gemini 免費配額已用完（429）。請改選「僅本機規則」、等候配額重置，" +
+      "或至 Google AI Studio 查看用量／升級方案。"
+    );
+  }
+  let snippet = "";
   try {
-    parsed = JSON.parse(text);
+    const j = JSON.parse(errText);
+    snippet = j?.error?.message || "";
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("無法解析 AI 回傳的 JSON");
-    parsed = JSON.parse(match[0]);
+    snippet = errText.slice(0, 120);
+  }
+  return `Gemini API 錯誤 (${status})${snippet ? `：${snippet}` : ""}`;
+}
+
+async function parseIntent(userText) {
+  const mode = getParseMode();
+
+  if (mode === "local") {
+    return parseIntentLocally(userText);
   }
 
-  const action = String(parsed.action || "none").toLowerCase();
-  const valid = ["forward", "backward", "left", "right", "center", "none"];
-  if (!valid.includes(action)) {
-    return { action: "none", reason: parsed.reason || "無法辨識動作" };
+  if (mode === "gemini") {
+    const result = await parseIntentWithGemini(userText);
+    return result;
   }
 
-  return {
-    action,
-    reason: parsed.reason || ACTION_LABELS[action],
-  };
+  if (!getApiKey()) {
+    return parseIntentLocally(userText);
+  }
+
+  try {
+    return await parseIntentWithGemini(userText);
+  } catch (err) {
+    if (err.quotaExceeded || isQuotaError(429, err.message)) {
+      const local = parseIntentLocally(userText);
+      local.reason = `${local.reason}（Gemini 配額不足，已自動改用本機）`;
+      return local;
+    }
+    throw err;
+  }
 }
 
 async function handleTranscript(text) {
@@ -222,13 +400,20 @@ async function handleTranscript(text) {
   elements.transcript.textContent = trimmed;
   isProcessing = true;
   elements.btnTalk.disabled = true;
-  setStatus("AI 正在理解語意…");
+  const modeLabel =
+    getParseMode() === "local"
+      ? "本機規則"
+      : getParseMode() === "gemini"
+        ? "Gemini"
+        : "自動";
+  setStatus(`正在以「${modeLabel}」理解語意…`);
   setIntent("分析中…");
 
   try {
-    const { action, reason } = await parseIntentWithGemini(trimmed);
+    const { action, reason, source } = await parseIntent(trimmed);
     const label = ACTION_LABELS[action] || action;
-    setIntent(`${label} — ${reason}`);
+    const via = source?.startsWith("gemini") ? "Gemini" : "本機";
+    setIntent(`${label} — ${reason}（${via}）`);
 
     if (action === "none") {
       setStatus("已理解，但不需要移動機器人");
@@ -366,11 +551,24 @@ function init() {
   elements.settingsForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const key = elements.apiKeyInput.value.trim();
-    if (!key) return;
-    saveApiKey(key);
+    const mode =
+      elements.settingsForm.querySelector('input[name="parseMode"]:checked')
+        ?.value || "auto";
+    if (mode !== "local" && !key) {
+      setStatus("請輸入 API Key，或改選「僅本機規則」");
+      return;
+    }
+    saveSettings(key, mode);
     elements.settingsDialog.close();
-    setStatus("API Key 已儲存，請按住按鈕說話");
+    const hint =
+      mode === "local"
+        ? "已使用本機規則（不呼叫 API）"
+        : "設定已儲存，請按住按鈕說話";
+    setStatus(hint);
   });
+
+  elements.btnOpenSettings?.addEventListener("click", openSettings);
+  elements.btnOpenSettingsMain?.addEventListener("click", openSettings);
 
   elements.btnCenter.addEventListener("click", () => {
     resetToCenter();
@@ -380,8 +578,12 @@ function init() {
 
   bindTalkButton();
 
-  if (!getApiKey()) {
-    elements.settingsDialog.showModal();
+  syncSettingsForm();
+
+  if (getParseMode() === "local") {
+    setStatus("本機規則模式，請按住麥克風按鈕說話（不需 API）");
+  } else if (!getApiKey()) {
+    openSettings();
   } else {
     setStatus("準備就緒，請按住麥克風按鈕說話");
   }

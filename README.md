@@ -48,6 +48,9 @@ npx --yes serve .
 
 | 問題 | 作法 |
 |------|------|
+| **Gemini 429 配額用盡** | 點「設定」→ 選 **僅本機規則**（不消耗 API）；或等免費額度每日重置；或到 [AI Studio 用量](https://aistudio.google.com/) 查看 |
 | 麥克風無法使用 | 使用 HTTPS（GitHub Pages）或 localhost；允許瀏覽器麥克風權限 |
 | Gemini 錯誤 403 | 檢查 API Key、是否啟用 Generative Language API |
-| 語意不準 | 可在 `app.js` 的 `buildGeminiPrompt` 中補充你的常用說法範例 |
+| 語意不準 | 改回「自動」或「僅 Gemini」；或在 `buildGeminiPrompt` 補充範例句 |
+
+預設為 **自動**：Gemini 失敗（含 429）時會改用本機否定／轉折規則，仍可控制機器人。

@@ -37,6 +37,7 @@
       <span class="btn-label">按住說話</span>
     </button>
     <button type="button" class="btn-secondary" id="btnCenter">回到中央</button>
+    <button type="button" class="btn-secondary" id="btnOpenSettingsMain">設定</button>
   </section>
 
   <section class="status-panel">
@@ -57,10 +58,26 @@
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>
         取得 API Key。金鑰僅儲存在此瀏覽器的本機，不會上傳到 GitHub。
       </p>
-      <label for="apiKeyInput">API Key</label>
-      <input type="password" id="apiKeyInput" autocomplete="off" placeholder="AIza..." required />
+      <fieldset class="parse-mode-fieldset">
+        <legend>語意解析方式</legend>
+        <label class="radio-row">
+          <input type="radio" name="parseMode" value="auto" checked />
+          自動（優先 Gemini，配額不足時改本機規則）
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="parseMode" value="local" />
+          僅本機規則（不消耗 API，適合 429 配額用盡）
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="parseMode" value="gemini" />
+          僅 Gemini（需 API Key）
+        </label>
+      </fieldset>
+      <label for="apiKeyInput">API Key（本機模式可留空）</label>
+      <input type="password" id="apiKeyInput" autocomplete="off" placeholder="AIza..." />
       <div class="dialog-actions">
-        <button type="submit" class="btn-primary">儲存並開始</button>
+        <button type="button" class="btn-secondary" id="btnOpenSettings">設定</button>
+        <button type="submit" class="btn-primary">儲存</button>
       </div>
     </form>
   </dialog>
