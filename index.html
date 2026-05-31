@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>語音控制機器人</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>語音控制機器人</h1>
+    <p class="subtitle">按住按鈕說話，AI 會理解語意並移動機器人</p>
+  </header>
+
+  <main class="main">
+  <section class="arena" id="arena" aria-label="機器人活動區域">
+    <div class="grid-hint" aria-hidden="true"></div>
+    <div class="robot" id="robot" role="img" aria-label="機器人">
+      <div class="robot-antenna"></div>
+      <div class="robot-head">
+        <span class="robot-eye left"></span>
+        <span class="robot-eye right"></span>
+      </div>
+      <div class="robot-body">
+        <span class="robot-light"></span>
+      </div>
+      <div class="robot-tracks">
+        <span class="track left"></span>
+        <span class="track right"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" class="btn-talk" id="btnTalk" aria-pressed="false">
+      <span class="btn-icon" aria-hidden="true">🎤</span>
+      <span class="btn-label">按住說話</span>
+    </button>
+    <button type="button" class="btn-secondary" id="btnCenter">回到中央</button>
+  </section>
+
+  <section class="status-panel">
+    <p class="status-label">狀態</p>
+    <p class="status-text" id="statusText">準備就緒，請按住麥克風按鈕說話</p>
+    <p class="transcript-label">你說的話</p>
+    <p class="transcript" id="transcript">—</p>
+    <p class="intent-label">AI 判斷</p>
+    <p class="intent" id="intentDisplay">—</p>
+  </section>
+  </main>
+
+  <dialog class="settings-dialog" id="settingsDialog">
+    <form method="dialog" class="settings-form" id="settingsForm">
+      <h2>設定 Gemini API</h2>
+      <p class="settings-hint">
+        請至
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>
+        取得 API Key。金鑰僅儲存在此瀏覽器的本機，不會上傳到 GitHub。
+      </p>
+      <label for="apiKeyInput">API Key</label>
+      <input type="password" id="apiKeyInput" autocomplete="off" placeholder="AIza..." required />
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary">儲存並開始</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
