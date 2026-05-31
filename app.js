@@ -1,5 +1,6 @@
-const STORAGE_KEY = "gemini_api_key";
 const STORAGE_PARSE_MODE = "parse_mode";
+/** 舊版曾寫入 localStorage，進入時清除 */
+const LEGACY_API_KEY_STORAGE = "gemini_api_key";
 const STEP_PX = 56;
 /** 配額較寬的模型優先；429 時會依序嘗試下一個 */
 const GEMINI_MODELS = [
@@ -42,7 +43,7 @@ const state = {
   maxY: 0,
 };
 
-let apiKey = localStorage.getItem(STORAGE_KEY) || "";
+let apiKey = "";
 let parseMode = localStorage.getItem(STORAGE_PARSE_MODE) || "auto";
 let recognition = null;
 let isListening = false;
@@ -91,18 +92,17 @@ function showSettingsIfNeeded() {
 
 function openSettings() {
   syncSettingsForm();
+  elements.apiKeyInput.value = "";
   elements.settingsDialog.showModal();
 }
 
 function saveSettings(key, mode) {
   apiKey = key.trim();
   parseMode = mode;
-  localStorage.setItem(STORAGE_KEY, apiKey);
   localStorage.setItem(STORAGE_PARSE_MODE, parseMode);
 }
 
 function syncSettingsForm() {
-  elements.apiKeyInput.value = apiKey;
   const radio = elements.settingsForm.querySelector(
     `input[name="parseMode"][value="${parseMode}"]`
   );
@@ -578,15 +578,9 @@ function init() {
 
   bindTalkButton();
 
+  localStorage.removeItem(LEGACY_API_KEY_STORAGE);
   syncSettingsForm();
-
-  if (getParseMode() === "local") {
-    setStatus("本機規則模式，請按住麥克風按鈕說話（不需 API）");
-  } else if (!getApiKey()) {
-    openSettings();
-  } else {
-    setStatus("準備就緒，請按住麥克風按鈕說話");
-  }
+  openSettings();
 }
 
 init();

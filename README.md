@@ -18,7 +18,7 @@
 npx --yes serve .
 ```
 
-瀏覽 `http://localhost:3000`，首次開啟會要求輸入 [Gemini API Key](https://aistudio.google.com/apikey)。
+瀏覽 `http://localhost:3000`，**每次開啟**都會要求輸入 [Gemini API Key](https://aistudio.google.com/apikey)（僅本次瀏覽有效）。
 
 ## 部署到 GitHub Pages
 
@@ -31,7 +31,7 @@ npx --yes serve .
 
 ### API Key 安全說明
 
-此專案為純前端，API Key 由使用者在本機瀏覽器輸入並存在 `localStorage`，**不會**寫進 GitHub。
+此專案為純前端，API Key 每次進入頁面時輸入，**不會**寫入 GitHub，也**不會**長期存在瀏覽器（僅本次分頁有效）。
 
 若要在公開網站長期使用，建議在 [Google AI Studio](https://aistudio.google.com/apikey) 為金鑰設定 **HTTP 網域限制**（填你的 `*.github.io` 網址），並監控用量。
 
