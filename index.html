@@ -3,83 +3,164 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>語音控制機器人</title>
+  <title>極智語音控制機器人</title>
   <link rel="stylesheet" href="styles.css" />
+  <!-- Google Fonts for premium typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+TC:wght@300;400;700&display=swap" rel="stylesheet">
 </head>
 <body>
+  <div class="glow-bg"></div>
+  
   <header class="header">
-    <h1>語音控制機器人</h1>
-    <p class="subtitle">按住按鈕說話，AI 會理解語意並移動機器人</p>
+    <div class="brand">
+      <span class="pulse-indicator idle" id="globalStatusIndicator"></span>
+      <h1>ROBOT <span class="gradient-text">VOICE COMMANDER</span></h1>
+    </div>
+    <p class="subtitle">體驗新一代語音語意解析，精準控制機器人移動</p>
   </header>
 
-  <main class="main">
-  <section class="arena" id="arena" aria-label="機器人活動區域">
-    <div class="grid-hint" aria-hidden="true"></div>
-    <div class="robot" id="robot" role="img" aria-label="機器人">
-      <div class="robot-antenna"></div>
-      <div class="robot-head">
-        <span class="robot-eye left"></span>
-        <span class="robot-eye right"></span>
+  <main class="main-container">
+    <!-- 機器人活動區域 -->
+    <section class="card arena-card">
+      <div class="card-header">
+        <h2>活動區域 <span class="badge" id="coordinateBadge">(0, 0)</span></h2>
       </div>
-      <div class="robot-body">
-        <span class="robot-light"></span>
+      <div class="arena" id="arena" aria-label="機器人活動區域">
+        <div class="grid-lines" aria-hidden="true"></div>
+        <div class="robot" id="robot" role="img" aria-label="機器人">
+          <div class="robot-antenna">
+            <span class="antenna-bulb"></span>
+          </div>
+          <div class="robot-head">
+            <span class="robot-eye left"></span>
+            <span class="robot-eye right"></span>
+          </div>
+          <div class="robot-body">
+            <div class="core-light"></div>
+          </div>
+          <div class="robot-tracks">
+            <span class="track left"></span>
+            <span class="track right"></span>
+          </div>
+        </div>
       </div>
-      <div class="robot-tracks">
-        <span class="track left"></span>
-        <span class="track right"></span>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="controls">
-    <button type="button" class="btn-talk" id="btnTalk" aria-pressed="false">
-      <span class="btn-icon" aria-hidden="true">🎤</span>
-      <span class="btn-label">按住說話</span>
-    </button>
-    <button type="button" class="btn-secondary" id="btnCenter">回到中央</button>
-    <button type="button" class="btn-secondary" id="btnOpenSettingsMain">設定</button>
-  </section>
+    <!-- 控制與狀態面板 -->
+    <section class="card panel-card">
+      <div class="card-header">
+        <h2>控制與狀態面板</h2>
+        <button type="button" class="btn-icon-only" id="btnOpenSettingsMain" title="設定 Gemini API">⚙️</button>
+      </div>
 
-  <section class="status-panel">
-    <p class="status-label">狀態</p>
-    <p class="status-text" id="statusText">準備就緒，請按住麥克風按鈕說話</p>
-    <p class="transcript-label">你說的話</p>
-    <p class="transcript" id="transcript">—</p>
-    <p class="intent-label">AI 判斷</p>
-    <p class="intent" id="intentDisplay">—</p>
-  </section>
+      <div class="control-center">
+        <!-- 語音按鈕與波形 -->
+        <div class="voice-trigger-wrapper">
+          <button type="button" class="btn-talk" id="btnTalk" aria-pressed="false">
+            <div class="btn-talk-glow"></div>
+            <div class="btn-talk-content">
+              <span class="mic-icon">🎤</span>
+              <span class="btn-label">點擊開始說話</span>
+            </div>
+          </button>
+          
+          <div class="voice-wave" id="voiceWave">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button type="button" class="btn-secondary" id="btnCenter">📍 回到中央</button>
+        </div>
+      </div>
+
+      <div class="status-list">
+        <div class="status-item">
+          <span class="status-label">當前狀態</span>
+          <p class="status-value highlight" id="statusText">準備就緒，請點擊麥克風說話...</p>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">你說的話</span>
+          <div class="transcript-box">
+            <p class="transcript-text" id="transcript">—</p>
+          </div>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">AI 語意解析</span>
+          <div class="intent-box">
+            <p class="intent-text" id="intentDisplay">—</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 手動備用輸入 -->
+      <div class="manual-input-section">
+        <label for="manualInput" class="manual-label">文字備用語令輸入</label>
+        <div class="manual-input-row">
+          <input type="text" id="manualInput" placeholder="例如：先不要往前，改往右走" autocomplete="off" />
+          <button type="button" class="btn-primary" id="btnManualSend">送出</button>
+        </div>
+      </div>
+    </section>
   </main>
 
+  <!-- Gemini 設定 Modal -->
   <dialog class="settings-dialog" id="settingsDialog">
-    <form method="dialog" class="settings-form" id="settingsForm">
-      <h2>設定 Gemini API</h2>
-      <p class="settings-hint">
-        請至
-        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>
-        取得 API Key。每次開啟網頁都會詢問；金鑰僅用於本次瀏覽，關閉分頁後不會保留。
-      </p>
-      <fieldset class="parse-mode-fieldset">
-        <legend>語意解析方式</legend>
-        <label class="radio-row">
-          <input type="radio" name="parseMode" value="auto" checked />
-          自動（優先 Gemini，配額不足時改本機規則）
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="parseMode" value="local" />
-          僅本機規則（不消耗 API，適合 429 配額用盡）
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="parseMode" value="gemini" />
-          僅 Gemini（需 API Key）
-        </label>
-      </fieldset>
-      <label for="apiKeyInput">API Key（本機模式可留空）</label>
-      <input type="password" id="apiKeyInput" autocomplete="off" placeholder="AIza..." />
-      <div class="dialog-actions">
-        <button type="button" class="btn-secondary" id="btnOpenSettings">設定</button>
-        <button type="submit" class="btn-primary">儲存</button>
-      </div>
-    </form>
+    <div class="dialog-content">
+      <form method="dialog" class="settings-form" id="settingsForm">
+        <h2>Gemini API 設定</h2>
+        <p class="settings-hint">
+          請提供您的 Gemini API Key，或切換為本地解析模式。每次重新整理網頁時金鑰皆需重新輸入以策安全，不會儲存在永久快取中。
+        </p>
+
+        <div class="form-group">
+          <label>解析模式優先級</label>
+          <div class="radio-group">
+            <label class="radio-card">
+              <input type="radio" name="parseMode" value="auto" checked />
+              <div class="radio-card-content">
+                <strong>智能自動</strong>
+                <span>優先使用 Gemini，API 超額時自動切換至本地規則。</span>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="parseMode" value="gemini" />
+              <div class="radio-card-content">
+                <strong>僅限 Gemini</strong>
+                <span>一律使用 Gemini AI 解析（需填金鑰）。</span>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="parseMode" value="local" />
+              <div class="radio-card-content">
+                <strong>純本地解析</strong>
+                <span>完全不使用網路 API，採用本地邏輯解析。</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" id="apiKeyGroup">
+          <label for="apiKeyInput">Gemini API Key</label>
+          <input type="password" id="apiKeyInput" autocomplete="off" placeholder="AIzaSy..." />
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="link-external">
+            前往 Google AI Studio 取得免費 API Key ↗
+          </a>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="submit" class="btn-primary">儲存並套用</button>
+        </div>
+      </form>
+    </div>
   </dialog>
 
   <script type="module" src="app.js"></script>

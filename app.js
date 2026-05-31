@@ -1,12 +1,9 @@
+// --- Constants & Config ---
 const STORAGE_PARSE_MODE = "parse_mode";
-/** 舊版曾寫入 localStorage，進入時清除 */
-const LEGACY_API_KEY_STORAGE = "gemini_api_key";
 const STEP_PX = 56;
-/** 配額較寬的模型優先；429 時會依序嘗試下一個 */
 const GEMINI_MODELS = [
-  "gemini-2.0-flash-lite",
-  "gemini-1.5-flash-8b",
-  "gemini-2.0-flash",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash",
 ];
 
 const ACTION_LABELS = {
@@ -18,6 +15,7 @@ const ACTION_LABELS = {
   none: "不移動",
 };
 
+// --- DOM Elements ---
 const elements = {
   arena: document.getElementById("arena"),
   robot: document.getElementById("robot"),
@@ -29,14 +27,19 @@ const elements = {
   settingsDialog: document.getElementById("settingsDialog"),
   settingsForm: document.getElementById("settingsForm"),
   apiKeyInput: document.getElementById("apiKeyInput"),
-  btnOpenSettings: document.getElementById("btnOpenSettings"),
   btnOpenSettingsMain: document.getElementById("btnOpenSettingsMain"),
+  manualInput: document.getElementById("manualInput"),
+  btnManualSend: document.getElementById("btnManualSend"),
+  coordinateBadge: document.getElementById("coordinateBadge"),
+  voiceWave: document.getElementById("voiceWave"),
+  globalStatusIndicator: document.getElementById("globalStatusIndicator"),
+  apiKeyGroup: document.getElementById("apiKeyGroup"),
 };
 
-/** @type {{ x: number, y: number, centerX: number, centerY: number, maxX: number, maxY: number }} */
+// --- State Machine ---
 const state = {
-  x: 0,
-  y: 0,
+  x: 0, // grid coordinate
+  y: 0, // grid coordinate
   centerX: 0,
   centerY: 0,
   maxX: 0,
@@ -48,90 +51,42 @@ let parseMode = localStorage.getItem(STORAGE_PARSE_MODE) || "auto";
 let recognition = null;
 let isListening = false;
 let isProcessing = false;
+let stopRequested = false;
 
+// --- Local Parsing Logic (Fallback / Local Mode) ---
 const DIRECTION_RULES = [
   { action: "forward", pattern: /往前|向前|前進|前走|前移|朝前/g },
-  { action: "backward", pattern: /往後|向后|後退|后退|後走|后移|朝後|朝后/g },
-  { action: "left", pattern: /往左|向左|左移|左走|朝左|左转|左轉/g },
-  { action: "right", pattern: /往右|向右|右移|右走|朝右|右转|右轉/g },
+  { action: "backward", pattern: /往後|向後|後退|後走|後移|朝後/g },
+  { action: "left", pattern: /往左|向左|左移|左走|朝左|左轉/g },
+  { action: "right", pattern: /往右|向右|右移|右走|朝右|右轉/g },
 ];
 
 const CENTER_PATTERN = /回(到)?中央|回(到)?中間|歸位|回原點|回家|置中/;
-const CLAUSE_SPLIT = /[，。；、]|但是|但|不過|不过|然而|所以|因此|那就|請你?|麻煩/;
+const CLAUSE_SPLIT = /[，。；、]|但是|但|不過|然而|所以|因此|那就|請你?|麻煩/;
 const NEGATION_BEFORE = /(不要|別|勿|沒有?|不能|不可|不會|不願|不想|非)\s*$/;
 
-function setStatus(text) {
-  elements.statusText.textContent = text;
-}
-
-function setIntent(text, isError = false) {
-  elements.intentDisplay.textContent = text;
-  elements.intentDisplay.classList.toggle("error", isError);
-}
-
-function getApiKey() {
-  return apiKey.trim();
-}
-
-function getParseMode() {
-  return parseMode;
-}
-
-function needsApiKey() {
-  return getParseMode() === "gemini";
-}
-
-function showSettingsIfNeeded() {
-  if (getParseMode() === "local") return true;
-  if (!getApiKey()) {
-    openSettings();
-    return false;
-  }
-  return true;
-}
-
-function openSettings() {
-  syncSettingsForm();
-  elements.apiKeyInput.value = "";
-  elements.settingsDialog.showModal();
-}
-
-function saveSettings(key, mode) {
-  apiKey = key.trim();
-  parseMode = mode;
-  localStorage.setItem(STORAGE_PARSE_MODE, parseMode);
-}
-
-function syncSettingsForm() {
-  const radio = elements.settingsForm.querySelector(
-    `input[name="parseMode"][value="${parseMode}"]`
-  );
-  if (radio) radio.checked = true;
-}
-
-function isQuotaError(status, bodyText) {
-  return status === 429 || /quota|rate limit|exceeded/i.test(bodyText || "");
-}
-
 /**
- * 本機語意解析：處理否定與轉折句（Gemini 配額用盡時的備援）
+ * Parses user text using rules.
+ * Handles conjunctions (like "但是", "但") and negations (like "不要往前").
+ * @param {string} userText 
  * @returns {{ action: string, reason: string, source: string }}
  */
 function parseIntentLocally(userText) {
   const text = userText.replace(/\s+/g, "");
 
+  // 1. Check for center command
   if (CENTER_PATTERN.test(text)) {
     const idx = text.search(CENTER_PATTERN);
-    const before = text.slice(Math.max(0, idx - 8), idx);
+    const before = text.slice(Math.max(0, idx - 6), idx);
     if (!NEGATION_BEFORE.test(before)) {
       return { action: "center", reason: "偵測到回到中央的指令", source: "local" };
     }
   }
 
+  // 2. Split clauses to analyze structure (e.g. "but" / "however" transitions)
   const clauses = text.split(CLAUSE_SPLIT).filter(Boolean);
   const segments = clauses.length ? clauses : [text];
 
-  /** @type {{ action: string, index: number, clauseIndex: number, negated: boolean }[]} */
   const mentions = [];
 
   segments.forEach((clause, clauseIndex) => {
@@ -140,14 +95,14 @@ function parseIntentLocally(userText) {
       let match;
       while ((match = re.exec(clause)) !== null) {
         const at = match.index;
-        const before = clause.slice(Math.max(0, at - 12), at);
+        const before = clause.slice(Math.max(0, at - 6), at);
+        
         let negated = NEGATION_BEFORE.test(before);
+        // Special double check (e.g. "不會往右走")
         if (/不會\s*$/.test(before) || /不會.*走/.test(before + match[0])) {
           negated = true;
         }
-        if (/會\s*$/.test(before) && !/不會\s*$/.test(before)) {
-          negated = false;
-        }
+        
         mentions.push({
           action,
           index: at,
@@ -158,106 +113,30 @@ function parseIntentLocally(userText) {
     }
   });
 
-  const affirmative = mentions.filter((m) => !m.negated);
+  // Filter out negated commands
+  const affirmative = mentions.filter(m => !m.negated);
+
   if (!affirmative.length) {
-    return { action: "none", reason: "僅偵測到否定或未辨識方向", source: "local" };
+    return { action: "none", reason: "僅偵測到否定或未匹配到方向", source: "local" };
   }
 
-  const laterClause = Math.max(...affirmative.map((m) => m.clauseIndex));
-  const inLater = affirmative.filter((m) => m.clauseIndex === laterClause);
-  const pool = inLater.length > 1 ? inLater : affirmative;
+  // Find mentions in the latest clause (usually last instruction has priority)
+  const maxClauseIndex = Math.max(...affirmative.map(m => m.clauseIndex));
+  const inLatestClause = affirmative.filter(m => m.clauseIndex === maxClauseIndex);
 
-  pool.sort((a, b) => {
-    if (a.clauseIndex !== b.clauseIndex) return b.clauseIndex - a.clauseIndex;
-    return a.index - b.index;
-  });
+  // Pick the first affirmative direction in the latest active clause
+  const chosen = inLatestClause[0] || affirmative[0];
 
-  const chosen = pool[0];
   return {
     action: chosen.action,
-    reason: `本機規則辨識為「${ACTION_LABELS[chosen.action]}」`,
+    reason: `本地規則辨識為「${ACTION_LABELS[chosen.action]}」`,
     source: "local",
   };
 }
 
-function measureArena() {
-  const rect = elements.arena.getBoundingClientRect();
-  const robotRect = elements.robot.getBoundingClientRect();
-  const halfRobot = robotRect.width / 2;
-  state.centerX = rect.width / 2;
-  state.centerY = rect.height / 2;
-  state.maxX = Math.floor((rect.width / 2 - halfRobot - 8) / STEP_PX);
-  state.maxY = Math.floor((rect.height / 2 - halfRobot - 8) / STEP_PX);
-}
-
-function applyRobotPosition(animateClass = "") {
-  const left = state.centerX + state.x * STEP_PX;
-  const top = state.centerY + state.y * STEP_PX;
-  elements.robot.style.left = `${left}px`;
-  elements.robot.style.top = `${top}px`;
-
-  elements.robot.classList.remove(
-    "moving-forward",
-    "moving-backward",
-    "moving-left",
-    "moving-right"
-  );
-  if (animateClass) {
-    elements.robot.classList.add(animateClass);
-    window.setTimeout(() => {
-      elements.robot.classList.remove(animateClass);
-    }, 500);
-  }
-}
-
-function resetToCenter() {
-  state.x = 0;
-  state.y = 0;
-  applyRobotPosition();
-}
-
-function moveByAction(action) {
-  measureArena();
-  let animateClass = "";
-
-  switch (action) {
-    case "forward":
-      if (state.y > -state.maxY) {
-        state.y -= 1;
-        animateClass = "moving-forward";
-      }
-      break;
-    case "backward":
-      if (state.y < state.maxY) {
-        state.y += 1;
-        animateClass = "moving-backward";
-      }
-      break;
-    case "left":
-      if (state.x > -state.maxX) {
-        state.x -= 1;
-        animateClass = "moving-left";
-      }
-      break;
-    case "right":
-      if (state.x < state.maxX) {
-        state.x += 1;
-        animateClass = "moving-right";
-      }
-      break;
-    case "center":
-      resetToCenter();
-      return;
-    case "none":
-    default:
-      return;
-  }
-
-  applyRobotPosition(animateClass);
-}
-
+// --- Gemini API Logic ---
 function buildGeminiPrompt(userText) {
-  return `你是語音指令解析器。使用者用中文（可能夾雜口語、贅句、轉折）控制畫面上的機器人移動。
+  return `你是語意指令解析器。使用者用中文控制畫面上的機器人移動。
 
 請仔細分析「否定、雙重否定、轉折、但、不過、然而、所以、請」等語氣，找出使用者最終真正希望機器人執行的「單一」動作。
 
@@ -277,310 +156,404 @@ ${userText}`;
 }
 
 async function parseIntentWithGemini(userText) {
-  const key = getApiKey();
-  if (!key) throw new Error("請先設定 Gemini API Key");
+  const key = apiKey.trim();
+  if (!key) throw new Error("尚未設定 Gemini API Key");
 
   const body = {
     contents: [{ role: "user", parts: [{ text: buildGeminiPrompt(userText) }] }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 256,
+      maxOutputTokens: 200,
       responseMimeType: "application/json",
     },
   };
 
-  let lastError = null;
+  let errorDetails = null;
 
   for (const model of GEMINI_MODELS) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const errText = res.ok ? "" : await res.text();
-
-    if (!res.ok) {
-      if (isQuotaError(res.status, errText)) {
-        lastError = { status: res.status, body: errText, quota: true };
-        continue;
-      }
-      throw new Error(formatGeminiError(res.status, errText));
-    }
-
-    const data = await res.json();
-    const text =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-
-    let parsed;
     try {
-      parsed = JSON.parse(text);
-    } catch {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("無法解析 AI 回傳的 JSON");
-      parsed = JSON.parse(match[0]);
-    }
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
-    const action = String(parsed.action || "none").toLowerCase();
-    const valid = ["forward", "backward", "left", "right", "center", "none"];
-    if (!valid.includes(action)) {
+      if (!res.ok) {
+        const text = await res.text();
+        errorDetails = { status: res.status, text };
+        continue; // Try next model
+      }
+
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) throw new Error("AI 回傳格式有誤");
+        parsed = JSON.parse(match[0]);
+      }
+
+      const action = String(parsed.action || "none").toLowerCase();
+      const valid = ["forward", "backward", "left", "right", "center", "none"];
+      
+      if (!valid.includes(action)) {
+        return { action: "none", reason: parsed.reason || "無法辨識指令", source: `gemini:${model}` };
+      }
+
       return {
-        action: "none",
-        reason: parsed.reason || "無法辨識動作",
+        action,
+        reason: parsed.reason || ACTION_LABELS[action],
         source: `gemini:${model}`,
       };
+    } catch (err) {
+      errorDetails = { status: 0, text: err.message };
     }
-
-    return {
-      action,
-      reason: parsed.reason || ACTION_LABELS[action],
-      source: `gemini:${model}`,
-    };
   }
 
-  const err = new Error(formatGeminiError(lastError?.status || 429, lastError?.body || ""));
-  err.quotaExceeded = true;
+  // If all models failed
+  const err = new Error(
+    errorDetails?.status === 429
+      ? "Gemini API 配額已用盡 (429)"
+      : `Gemini API 呼叫失敗: ${errorDetails?.text || "未知錯誤"}`
+  );
+  err.quotaExceeded = errorDetails?.status === 429;
   throw err;
 }
 
-function formatGeminiError(status, errText) {
-  if (isQuotaError(status, errText)) {
-    return (
-      "Gemini 免費配額已用完（429）。請改選「僅本機規則」、等候配額重置，" +
-      "或至 Google AI Studio 查看用量／升級方案。"
-    );
-  }
-  let snippet = "";
-  try {
-    const j = JSON.parse(errText);
-    snippet = j?.error?.message || "";
-  } catch {
-    snippet = errText.slice(0, 120);
-  }
-  return `Gemini API 錯誤 (${status})${snippet ? `：${snippet}` : ""}`;
-}
-
 async function parseIntent(userText) {
-  const mode = getParseMode();
-
-  if (mode === "local") {
+  if (parseMode === "local") {
     return parseIntentLocally(userText);
   }
 
-  if (mode === "gemini") {
-    const result = await parseIntentWithGemini(userText);
-    return result;
+  if (parseMode === "gemini") {
+    return await parseIntentWithGemini(userText);
   }
 
-  if (!getApiKey()) {
-    return parseIntentLocally(userText);
+  // Auto Mode: Try Gemini first, fallback to local if quota exceeded or offline
+  if (!apiKey.trim()) {
+    const localRes = parseIntentLocally(userText);
+    localRes.reason = `${localRes.reason} (未輸入 API Key，自動切換至本地模式)`;
+    return localRes;
   }
 
   try {
     return await parseIntentWithGemini(userText);
   } catch (err) {
-    if (err.quotaExceeded || isQuotaError(429, err.message)) {
-      const local = parseIntentLocally(userText);
-      local.reason = `${local.reason}（Gemini 配額不足，已自動改用本機）`;
-      return local;
-    }
-    throw err;
+    console.warn("Gemini parsing failed, falling back to local:", err);
+    const localRes = parseIntentLocally(userText);
+    localRes.reason = `${localRes.reason} (${err.quotaExceeded ? "API 配額用盡" : "API 錯誤"}，自動改用本地模式)`;
+    return localRes;
   }
 }
 
-async function handleTranscript(text) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    setStatus("沒有聽到內容，請再試一次");
+// --- Movement & Arena Math ---
+function measureArena() {
+  const rect = elements.arena.getBoundingClientRect();
+  const robotRect = elements.robot.getBoundingClientRect();
+  const halfRobot = robotRect.width / 2;
+  
+  state.centerX = rect.width / 2;
+  state.centerY = rect.height / 2;
+  state.maxX = Math.floor((rect.width / 2 - halfRobot - 8) / STEP_PX);
+  state.maxY = Math.floor((rect.height / 2 - halfRobot - 8) / STEP_PX);
+}
+
+function updateCoordinateDisplay() {
+  elements.coordinateBadge.textContent = `(${state.x}, ${-state.y})`;
+}
+
+function applyRobotPosition(stateClass = "") {
+  const left = state.centerX + state.x * STEP_PX;
+  const top = state.centerY + state.y * STEP_PX;
+  
+  elements.robot.style.left = `${left}px`;
+  elements.robot.style.top = `${top}px`;
+  
+  updateCoordinateDisplay();
+
+  // Reset classes
+  elements.robot.className = "robot";
+  if (stateClass) {
+    elements.robot.classList.add(stateClass);
+  }
+}
+
+function resetToCenter() {
+  state.x = 0;
+  state.y = 0;
+  applyRobotPosition();
+}
+
+function moveByAction(action) {
+  measureArena();
+  let animationClass = "";
+
+  switch (action) {
+    case "forward":
+      if (state.y > -state.maxY) {
+        state.y -= 1;
+      }
+      break;
+    case "backward":
+      if (state.y < state.maxY) {
+        state.y += 1;
+      }
+      break;
+    case "left":
+      if (state.x > -state.maxX) {
+        state.x -= 1;
+      }
+      break;
+    case "right":
+      if (state.x < state.maxX) {
+        state.x += 1;
+      }
+      break;
+    case "center":
+      resetToCenter();
+      return;
+    case "none":
+    default:
+      return;
+  }
+
+  applyRobotPosition();
+}
+
+// --- Status Updates ---
+function updateIndicator(status) {
+  elements.globalStatusIndicator.className = `pulse-indicator ${status}`;
+  
+  // Update robot core light state
+  elements.robot.classList.remove("listening", "processing", "success", "error");
+  if (status === "listening") elements.robot.classList.add("listening");
+  if (status === "processing") elements.robot.classList.add("processing");
+  if (status === "success") elements.robot.classList.add("success");
+  if (status === "error") elements.robot.classList.add("error");
+}
+
+function setStatus(text, status = "idle") {
+  elements.statusText.textContent = text;
+  updateIndicator(status);
+}
+
+function setIntent(text, isError = false) {
+  elements.intentDisplay.textContent = text;
+  elements.intentDisplay.className = `intent-text ${isError ? "error" : ""}`;
+}
+
+// --- Speech Recognition Module ---
+function setupSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    setStatus("您的瀏覽器不支援 Web Speech API，請使用 Chrome/Edge", "error");
+    elements.btnTalk.disabled = true;
     return;
   }
 
-  elements.transcript.textContent = trimmed;
-  isProcessing = true;
-  elements.btnTalk.disabled = true;
-  const modeLabel =
-    getParseMode() === "local"
-      ? "本機規則"
-      : getParseMode() === "gemini"
-        ? "Gemini"
-        : "自動";
-  setStatus(`正在以「${modeLabel}」理解語意…`);
-  setIntent("分析中…");
+  recognition = new SpeechRecognition();
+  recognition.lang = "zh-TW";
+  recognition.interimResults = true;
+  recognition.continuous = false; // Only active when button triggered to prevent constant loops
 
-  try {
-    const { action, reason, source } = await parseIntent(trimmed);
-    const label = ACTION_LABELS[action] || action;
-    const via = source?.startsWith("gemini") ? "Gemini" : "本機";
-    setIntent(`${label} — ${reason}（${via}）`);
+  let speechResult = "";
+  let hadError = false;
 
-    if (action === "none") {
-      setStatus("已理解，但不需要移動機器人");
-    } else {
-      moveByAction(action);
-      setStatus(`已執行：${label}`);
-    }
-  } catch (err) {
-    console.error(err);
-    setIntent(err.message || "解析失敗", true);
-    setStatus("發生錯誤，請檢查 API Key 或網路");
-  } finally {
-    isProcessing = false;
-    elements.btnTalk.disabled = false;
-  }
-}
-
-function createSpeechRecognition() {
-  const SpeechRecognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    setStatus("此瀏覽器不支援語音辨識，請使用 Chrome 或 Edge");
-    elements.btnTalk.disabled = true;
-    return null;
-  }
-
-  const rec = new SpeechRecognition();
-  rec.lang = "zh-TW";
-  rec.interimResults = true;
-  rec.continuous = true;
-  rec.maxAlternatives = 1;
-
-  let finalText = "";
-
-  rec.onstart = () => {
-    finalText = "";
+  recognition.onstart = () => {
     isListening = true;
-    elements.robot.classList.add("listening");
-    elements.btnTalk.setAttribute("aria-pressed", "true");
-    elements.btnTalk.querySelector(".btn-label").textContent = "放開結束";
-    setStatus("正在聆聽…");
+    stopRequested = false;
+    speechResult = "";
+    hadError = false;
+    elements.voiceWave.classList.add("active");
+    elements.btnTalk.classList.add("is-listening");
+    elements.btnTalk.querySelector(".btn-label").textContent = "點擊結束並送出";
+    setStatus("正在聆聽語令，請說話...", "listening");
   };
 
-  rec.onresult = (event) => {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      const transcript = result[0].transcript;
-      if (result.isFinal) {
-        finalText += transcript;
-      } else {
-        interim += transcript;
+  recognition.onresult = (event) => {
+    const resultText = Array.from(event.results)
+      .map(res => res[0].transcript)
+      .join("");
+    speechResult = resultText;
+    elements.transcript.textContent = resultText;
+  };
+
+  recognition.onerror = (event) => {
+    hadError = true;
+    if (event.error === "no-speech") {
+      setStatus("未偵測到聲音，請再試一次", "error");
+    } else if (event.error === "not-allowed") {
+      setStatus("麥克風存取被拒絕，請允許麥克風權限", "error");
+    } else {
+      setStatus(`語音辨識錯誤: ${event.error}`, "error");
+    }
+    console.error("SpeechRecognition error:", event.error);
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    elements.voiceWave.classList.remove("active");
+    elements.btnTalk.classList.remove("is-listening");
+    elements.btnTalk.querySelector(".btn-label").textContent = "點擊開始說話";
+
+    const text = speechResult.trim();
+    if (text) {
+      handleCommand(text);
+    } else {
+      if (!hadError) {
+        setStatus("這次沒聽到內容。請再點麥克風，或直接打字送出", "idle");
       }
     }
-    elements.transcript.textContent = (finalText + interim).trim() || "…";
   };
+}
 
-  rec.onerror = (event) => {
-    if (event.error === "no-speech") {
-      setStatus("沒有偵測到語音，請再試一次");
-      return;
+async function handleCommand(text) {
+  if (isProcessing) return;
+  isProcessing = true;
+  setStatus("AI 語意分析中...", "processing");
+  setIntent("分析中...");
+
+  try {
+    const { action, reason, source } = await parseIntent(text);
+    const label = ACTION_LABELS[action] || action;
+    const from = source.startsWith("gemini") ? "Gemini AI" : "本地解析";
+    
+    setIntent(`${label} — ${reason} (${from})`);
+    
+    if (action === "none") {
+      setStatus("語令解析完成，不需移動", "success");
+    } else {
+      moveByAction(action);
+      setStatus(`成功執行指令: ${label}`, "success");
     }
-    if (event.error === "aborted") return;
-    setStatus(`語音錯誤：${event.error}`);
-  };
-
-  rec.onend = () => {
-    isListening = false;
-    elements.robot.classList.remove("listening");
-    elements.btnTalk.setAttribute("aria-pressed", "false");
-    elements.btnTalk.querySelector(".btn-label").textContent = "按住說話";
-
-    const text = finalText.trim() || elements.transcript.textContent.trim();
-    if (text && text !== "…" && !isProcessing) {
-      handleTranscript(text);
-    } else if (!isProcessing) {
-      setStatus("準備就緒");
-    }
-  };
-
-  return rec;
+  } catch (err) {
+    console.error("Failed to process command:", err);
+    setStatus("解析失敗，請檢查網路或金鑰", "error");
+    setIntent(err.message, true);
+  } finally {
+    isProcessing = false;
+  }
 }
 
 function startListening() {
-  if (!showSettingsIfNeeded() || isProcessing || isListening) return;
+  if (isListening || isProcessing) return;
+  
+  if (parseMode !== "local" && !apiKey.trim()) {
+    openSettings();
+    setStatus("請先輸入 Gemini API Key 或選用純本地模式", "error");
+    return;
+  }
 
-  if (!recognition) recognition = createSpeechRecognition();
-  if (!recognition) return;
-
+  elements.transcript.textContent = "聆聽中...";
   try {
     recognition.start();
-  } catch {
-    /* 已在執行 */
+  } catch (err) {
+    console.error("Failed to start recognition:", err);
+    isListening = false;
+    setStatus("麥克風啟動失敗，請重新點擊", "error");
   }
 }
 
 function stopListening() {
-  if (recognition && isListening) {
-    try {
-      recognition.stop();
-    } catch {
-      /* ignore */
-    }
+  if (!isListening) return;
+  stopRequested = true;
+  recognition.stop();
+}
+
+function toggleListening() {
+  if (isListening) {
+    stopListening();
+  } else {
+    startListening();
   }
 }
 
-function bindTalkButton() {
-  const start = (e) => {
-    e.preventDefault();
-    startListening();
-  };
-  const stop = (e) => {
-    e.preventDefault();
-    stopListening();
-  };
-
-  elements.btnTalk.addEventListener("mousedown", start);
-  elements.btnTalk.addEventListener("mouseup", stop);
-  elements.btnTalk.addEventListener("mouseleave", stop);
-
-  elements.btnTalk.addEventListener("touchstart", start, { passive: false });
-  elements.btnTalk.addEventListener("touchend", stop);
-  elements.btnTalk.addEventListener("touchcancel", stop);
+// --- Settings Dialog ---
+function openSettings() {
+  elements.apiKeyInput.value = apiKey;
+  const radio = elements.settingsForm.querySelector(`input[name="parseMode"][value="${parseMode}"]`);
+  if (radio) radio.checked = true;
+  toggleApiKeyField(parseMode);
+  elements.settingsDialog.showModal();
 }
 
+function toggleApiKeyField(mode) {
+  if (mode === "local") {
+    elements.apiKeyGroup.style.display = "none";
+  } else {
+    elements.apiKeyGroup.style.display = "flex";
+  }
+}
+
+// --- Initialization ---
 function init() {
   measureArena();
   resetToCenter();
+
   window.addEventListener("resize", () => {
     measureArena();
     applyRobotPosition();
   });
 
+  // Settings Events
+  elements.btnOpenSettingsMain.addEventListener("click", openSettings);
+  
+  elements.settingsForm.querySelector(".radio-group").addEventListener("change", (e) => {
+    toggleApiKeyField(e.target.value);
+  });
+
   elements.settingsForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    const mode = elements.settingsForm.querySelector('input[name="parseMode"]:checked').value;
     const key = elements.apiKeyInput.value.trim();
-    const mode =
-      elements.settingsForm.querySelector('input[name="parseMode"]:checked')
-        ?.value || "auto";
+
     if (mode !== "local" && !key) {
-      setStatus("請輸入 API Key，或改選「僅本機規則」");
+      alert("請輸入 Gemini API Key，或切換為純本地解析。");
       return;
     }
-    saveSettings(key, mode);
+
+    apiKey = key;
+    parseMode = mode;
+    localStorage.setItem(STORAGE_PARSE_MODE, parseMode);
     elements.settingsDialog.close();
-    const hint =
-      mode === "local"
-        ? "已使用本機規則（不呼叫 API）"
-        : "設定已儲存，請按住按鈕說話";
-    setStatus(hint);
+    setStatus(`設定已套用 (${mode === "local" ? "純本地" : "Gemini"})`, "idle");
   });
 
-  elements.btnOpenSettings?.addEventListener("click", openSettings);
-  elements.btnOpenSettingsMain?.addEventListener("click", openSettings);
+  // Talk Button
+  elements.btnTalk.addEventListener("click", toggleListening);
 
+  // Center Button
   elements.btnCenter.addEventListener("click", () => {
     resetToCenter();
-    setStatus("已回到畫面中央");
-    setIntent(ACTION_LABELS.center);
+    setStatus("機器人已回到畫面中央", "idle");
+    setIntent("回到中央");
   });
 
-  bindTalkButton();
+  // Manual Command
+  const sendManual = () => {
+    const text = elements.manualInput.value.trim();
+    if (!text) return;
+    elements.transcript.textContent = text;
+    elements.manualInput.value = "";
+    handleCommand(text);
+  };
 
-  localStorage.removeItem(LEGACY_API_KEY_STORAGE);
-  syncSettingsForm();
-  openSettings();
+  elements.btnManualSend.addEventListener("click", sendManual);
+  elements.manualInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      sendManual();
+    }
+  });
+
+  setupSpeechRecognition();
+  
+  // Prompt settings modal on startup
+  setTimeout(openSettings, 400);
 }
 
 init();
