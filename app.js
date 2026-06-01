@@ -2,8 +2,11 @@
 const STORAGE_PARSE_MODE = "parse_mode";
 const STEP_PX = 56;
 const GEMINI_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-1.5-flash",
+  "gemini-3.5-flash",        // 2026年5月最新推出，速度極快、專為 Agent 工作流優化的主力 Flash 模型
+  "gemini-3.1-pro-preview",  // 目前最強的高級推理、複雜邏輯與程式碼生成模型
+  "gemini-3.1-flash-lite",   // 超輕量、超低延遲且極具成本優化的版本
+  "gemini-2.5-pro",          // 2.5 世代的旗艦穩定版
+  "gemini-2.5-flash",        // 2.5 世代的通用效能平衡版
 ];
 
 const ACTION_LABELS = {
